@@ -3,22 +3,20 @@
 
 $ErrorActionPreference = "Stop"
 
-# Determine path relative to script location
 $scriptPath = $PSScriptRoot
 if (-not $scriptPath) { $scriptPath = Get-Location }
 $modsPath = Join-Path $scriptPath "mods\bf2"
 $objectsZip = Join-Path $modsPath "Objects_server.zip"
 $aiFile = Join-Path $modsPath "AI\AIDefault.ai"
 
-# ========== BACKUP OBJECTS_SERVER.ZIP BEFORE MENU ==========
+# Backup Objects_server.zip
 if (Test-Path $objectsZip) {
     $backupDir = Join-Path $modsPath "backup"
     if (-not (Test-Path $backupDir)) {
         New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     }
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backupFile = Join-Path $backupDir "Objects_server_backup_$timestamp.zip"   # <--- .zip extension
-    
+    $backupFile = Join-Path $backupDir "Objects_server_backup_$timestamp.zip"
     Write-Host "`n===== BACKUP OBJECTS_SERVER.ZIP =====" -ForegroundColor Cyan
     Write-Host "Source: $objectsZip" -ForegroundColor Gray
     Write-Host "Destination: $backupFile" -ForegroundColor Gray
@@ -37,9 +35,7 @@ else {
     Write-Host "Make sure the script is run from the main Battlefield 2 folder." -ForegroundColor Red
     exit
 }
-# ============================================
 
-# Function to backup AIDefault.ai file
 function Backup-File {
     param([string]$path)
     if (Test-Path $path) {
@@ -51,7 +47,6 @@ function Backup-File {
     return $false
 }
 
-# Function to modify file inside ZIP without extracting everything (use temp folder)
 function Edit-ZipEntry {
     param(
         [string]$zipPath,
@@ -103,13 +98,12 @@ function Edit-ZipEntry {
     }
 }
 
-# Main menu
 do {
     Write-Host "`n===== BF2 MOD TOOL =====" -ForegroundColor Cyan
     Write-Host "1. Unlimited Ammo - Handheld weapons"
     Write-Host "2. Unlimited Ammo - Vehicles (Air/Land)"
     Write-Host "3. Set Max Bots (edit AIDefault.ai)"
-    Write-Host "4. Set AGM Fire Rate to 9999 (Jet/Heli dual-seat)"
+    Write-Host "4. Enhance Air Vehicles: Missile/Bomb (RPM=999, burst=5, PIAltFire) + Flare Spam (X) + Reduce Flare Cooldown to 1s"
     Write-Host "0. Exit"
     $choice = Read-Host "Select option"
 
@@ -205,55 +199,123 @@ rem ---EndComp ---
         }
 
         "4" {
-            $targetAircraft = @(
-                "usair_f15.tweak",
-                "air_su34.tweak",
-                "air_su30mkk.tweak",
-                "air_f35b.tweak",
-                "ahe_ah1z.tweak",
-                "ahe_havoc.tweak",
-                "ahe_z10.tweak"
-            )
-            $modified = 0
-            foreach ($fileName in $targetAircraft) {
-                Add-Type -AssemblyName System.IO.Compression.FileSystem
-                $zip = [System.IO.Compression.ZipFile]::OpenRead($objectsZip)
-                $entries = $zip.Entries | Where-Object { $_.FullName -like "*$fileName" }
-                $zip.Dispose()
-                if ($entries.Count -eq 0) {
-                    Write-Host "File $fileName not found in zip." -ForegroundColor DarkGray
-                    continue
+            Write-Host "===== ENHANCING AIR VEHICLES =====" -ForegroundColor Yellow
+            
+            # Step 1: Modify global flare launcher (reduce cooldown, set proper values)
+            Write-Host "`n[1/2] Modifying global flare launcher (decoy_Flare_Launcher.tweak)..." -ForegroundColor Cyan
+            $flareGlobalPath = "Weapons/Armament/decoy_flare_launcher/decoy_Flare_Launcher.tweak"
+            $resGlobal = Edit-ZipEntry -zipPath $objectsZip -entryPath $flareGlobalPath -modifyAction {
+                param($content)
+                # Keep SingleFireComp, only adjust values
+                # Set roundsPerMinute to 300 (or higher, but stable)
+                $content = $content -replace '(ObjectTemplate\.fire\.roundsPerMinute\s+)\d+', '${1}300'
+                # Ensure fireInput = PIFlareFire
+                if ($content -match 'ObjectTemplate\.fire\.fireInput') {
+                    $content = $content -replace '(ObjectTemplate\.fire\.fireInput\s+)\S+', '${1}PIFlareFire'
+                } else {
+                    $content = $content -replace '(rem ---BeginComp:SingleFireComp ---.*?ObjectTemplate.createComponent SingleFireComp)', "`$1`nObjectTemplate.fire.fireInput PIFlareFire"
                 }
-                $entry = $entries[0]
+                # addFireRate = 1, burstSize = 5
+                if ($content -match 'ObjectTemplate\.fire\.addFireRate') {
+                    $content = $content -replace '(ObjectTemplate\.fire\.addFireRate\s+)\d+', '${1}1'
+                } else {
+                    $content = $content -replace '(rem ---EndComp ---)', "ObjectTemplate.fire.addFireRate 1`n`$1"
+                }
+                if ($content -match 'ObjectTemplate\.fire\.burstSize') {
+                    $content = $content -replace '(ObjectTemplate\.fire\.burstSize\s+)\d+', '${1}5'
+                } else {
+                    $content = $content -replace '(rem ---EndComp ---)', "ObjectTemplate.fire.burstSize 5`n`$1"
+                }
+                # Reduce cooldown: minimumTimeUntilReload = 1, reloadTime = 0.5
+                $content = $content -replace '(ObjectTemplate\.ammo\.minimumTimeUntilReload\s+)\d+', '${1}1'
+                $content = $content -replace '(ObjectTemplate\.ammo\.reloadTime\s+)\d+', '${1}0.5'
+                # Set unlimited ammo: magSize = 999, nrOfMags = 999
+                if ($content -match 'ObjectTemplate\.ammo\.magSize') {
+                    $content = $content -replace '(ObjectTemplate\.ammo\.magSize\s+)\-?\d+', '${1}999'
+                } else {
+                    $content = $content -replace '(rem ---BeginComp:DefaultAmmoComp ---.*?ObjectTemplate.createComponent DefaultAmmoComp)', "`$1`nObjectTemplate.ammo.magSize 999"
+                }
+                if ($content -match 'ObjectTemplate\.ammo\.nrOfMags') {
+                    $content = $content -replace '(ObjectTemplate\.ammo\.nrOfMags\s+)\-?\d+', '${1}999'
+                } else {
+                    $content = $content -replace '(rem ---BeginComp:DefaultAmmoComp ---.*?ObjectTemplate.createComponent DefaultAmmoComp)', "`$1`nObjectTemplate.ammo.nrOfMags 999"
+                }
+                return $content
+            }
+            if ($resGlobal) { Write-Host "Global flare launcher modified: cooldown reduced to ~1s, spam enabled (X key)." -ForegroundColor Green }
+            else { Write-Host "Global flare launcher not found or unchanged." -ForegroundColor Yellow }
+
+            # Step 2: Modify individual air vehicle tweaks (missiles/bombs) without breaking flares
+            Write-Host "`n[2/2] Modifying individual air vehicle weapons (missiles/bombs)..." -ForegroundColor Cyan
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($objectsZip)
+            $vehicleTweaks = $zip.Entries | Where-Object { 
+                ($_.FullName -like "Vehicles/Air/*.tweak" -or $_.FullName -like "Vehicles/Air/*/*.tweak") -and
+                $_.FullName -notlike "*cannon*" -and $_.FullName -notlike "*gun*" -and $_.FullName -notlike "*autocannon*"
+            }
+            $zip.Dispose()
+
+            $count = 0
+            foreach ($entry in $vehicleTweaks) {
+                $fileName = Split-Path $entry.FullName -Leaf
+                if ($fileName -match '(?i)cannon|gun|autocannon|mg$') { continue }
+                
                 $res = Edit-ZipEntry -zipPath $objectsZip -entryPath $entry.FullName -modifyAction {
                     param($content)
-                    $modifiedContent = $content
-                    # MultiFireComp
+                    # Only modify MultiFireComp blocks that are NOT flare-related
+                    # We'll use regex to find each MultiFireComp block, check if it contains "Flare" or not
                     $patternMulti = '(?s)(rem ---BeginComp:MultiFireComp ---.*?rem ---EndComp ---)'
-                    if ($modifiedContent -match $patternMulti) {
-                        $block = $matches[1]
-                        $newBlock = $block -replace '(ObjectTemplate\.fire\.roundsPerMinute\s+)\d+', '${1}9999'
-                        if ($newBlock -notmatch 'ObjectTemplate\.fire\.addFireRate') {
-                            $newBlock = $newBlock -replace '(rem ---EndComp ---)', "ObjectTemplate.fire.addFireRate 1`nObjectTemplate.fire.burstSize 0`n`$1"
+                    $modifiedContent = [regex]::Replace($content, $patternMulti, {
+                        param($match)
+                        $block = $match.Groups[0].Value
+                        # Skip if this block appears to be a flare launcher (based on object name or "flare")
+                        if ($block -match '(?i)flare' -or $fileName -match '(?i)flare') {
+                            return $block  # leave flare blocks untouched (already handled globally)
                         }
-                        else {
-                            $newBlock = $newBlock -replace '(ObjectTemplate\.fire\.addFireRate\s+)\d+', '${1}1'
-                            $newBlock = $newBlock -replace '(ObjectTemplate\.fire\.burstSize\s+)\d+', '${1}0'
+                        # Modify missile/bomb block
+                        $block = $block -replace '(ObjectTemplate\.fire\.roundsPerMinute\s+)\d+', '${1}999'
+                        if ($block -match 'ObjectTemplate\.fire\.fireInput') {
+                            $block = $block -replace '(ObjectTemplate\.fire\.fireInput\s+)\S+', '${1}PIAltFire'
+                        } else {
+                            $block = $block -replace '(rem ---BeginComp:MultiFireComp ---.*?ObjectTemplate.createComponent MultiFireComp)', "`$1`nObjectTemplate.fire.fireInput PIAltFire"
                         }
-                        $modifiedContent = $modifiedContent -replace $patternMulti, $newBlock
-                    }
-                    # SingleFireComp
-                    $patternSingle = '(?s)(rem ---BeginComp:SingleFireComp ---.*?rem ---EndComp ---)'
-                    if ($modifiedContent -match $patternSingle) {
-                        $block = $matches[1]
-                        $newBlock = $block -replace '(ObjectTemplate\.fire\.roundsPerMinute\s+)\d+', '${1}9999'
-                        $modifiedContent = $modifiedContent -replace $patternSingle, $newBlock
+                        if ($block -match 'ObjectTemplate\.fire\.addFireRate') {
+                            $block = $block -replace '(ObjectTemplate\.fire\.addFireRate\s+)\d+', '${1}1'
+                        } else {
+                            $block = $block -replace '(rem ---EndComp ---)', "ObjectTemplate.fire.addFireRate 1`n`$1"
+                        }
+                        if ($block -match 'ObjectTemplate\.fire\.burstSize') {
+                            $block = $block -replace '(ObjectTemplate\.fire\.burstSize\s+)\d+', '${1}5'
+                        } else {
+                            $block = $block -replace '(rem ---EndComp ---)', "ObjectTemplate.fire.burstSize 5`n`$1"
+                        }
+                        return $block
+                    })
+                    # Also ensure DefaultAmmoComp is set to 999 for these vehicle files
+                    if ($modifiedContent -match '(?s)(rem ---BeginComp:DefaultAmmoComp ---.*?rem ---EndComp ---)') {
+                        $newAmmo = @"
+rem ---BeginComp:DefaultAmmoComp ---
+ObjectTemplate.createComponent DefaultAmmoComp
+rem *** 999 AMMO FOR ALL ***
+ObjectTemplate.ammo.magSize 999
+ObjectTemplate.ammo.nrOfMags 999
+ObjectTemplate.ammo.autoReload 1
+ObjectTemplate.ammo.reloadWithoutPlayer 1
+rem ---EndComp ---
+"@
+                        $modifiedContent = $modifiedContent -replace '(?s)(rem ---BeginComp:DefaultAmmoComp ---.*?rem ---EndComp ---)', $newAmmo
                     }
                     return $modifiedContent
                 }
-                if ($res) { $modified++ }
+                if ($res) { $count++ }
             }
-            Write-Host "Modified $modified aircraft files (AGM rate = 9999)." -ForegroundColor Green
+            Write-Host "Modified $count air vehicle files (missiles/bombs)." -ForegroundColor Green
+            Write-Host "`n===== SUMMARY =====" -ForegroundColor Cyan
+            Write-Host "✓ Global flare cooldown reduced to ~1 second (press X to spam)." -ForegroundColor Green
+            Write-Host "✓ Flare uses PIFlareFire (X key) - stable." -ForegroundColor Green
+            Write-Host "✓ Missiles/bombs set to RPM=999, burst=5, fireInput=PIAltFire (RMB)." -ForegroundColor Green
+            Write-Host "✓ Unlimited ammo (999) applied to both." -ForegroundColor Green
+            Write-Host "If you still experience crashes, restore backup from 'mods/bf2/backup'." -ForegroundColor Yellow
         }
 
         "0" { Write-Host "Exiting..." -ForegroundColor Cyan }
